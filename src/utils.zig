@@ -41,7 +41,6 @@ pub fn unzip(path: string, force: bool) !string {
     // Get the basename of the path
     var split = std.mem.splitSequence(u8, path, ".docx");
     const basename = split.next().?;
-    zlog.debug("basename={s}", .{basename});
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
 
     const isAbs = isAbsPath(basename);

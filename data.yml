@@ -1,3 +1,4 @@
-test: replace
+TEST: replace
 another:
   file: test.csv
+content: aaa

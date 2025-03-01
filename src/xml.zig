@@ -6,6 +6,7 @@ const xml = @cImport({
     @cInclude("libxml/tree.h");
 });
 const cfg = @import("config.zig");
+const table = @import("table.zig");
 const string = []const u8;
 
 pub const parseDocArgs = struct {
@@ -157,9 +158,8 @@ pub fn parseDoc(args: parseDocArgs) !void {
     var root = root_ptr.*;
 
     const p_tags = try getPTags(allocator, &root);
-    zlog.info("p_tags={d}", .{p_tags.items.len});
     for (p_tags.items) |p_tag| {
-        const text = getText(allocator, p_tag) catch "";
+        var text = getText(allocator, p_tag) catch "";
         if (std.mem.eql(u8, text, "")) {
             continue;
         }
@@ -168,30 +168,44 @@ pub fn parseDoc(args: parseDocArgs) !void {
             while (placeholder_found) {
                 var local_placeholder_found = false;
                 for (placeholders.items) |placeholder| {
-                    const value = args.config.replaceMap.get(placeholder);
-                    if (value == null) {
-                        continue;
-                    }
-                    switch (value.?) {
-                        .string => |str| {
-                            if (std.mem.indexOf(u8, text, placeholder) != null) {
-                                const replaceArgs = ReplaceArgs{
-                                    .allocator = allocator, //
-                                    .p_tag = p_tag, //
-                                    .p_tag_text = text, //
-                                    .placeholder = placeholder, //
-                                    .new_text = str,
-                                };
-                                try replacePlaceholder(replaceArgs);
-                                // local_placeholder_found = true;
-                                local_placeholder_found = false;
-                                break;
-                            }
-                        },
-                        .table => |_| {},
+                    if (std.mem.indexOf(u8, text, placeholder) != null) {
+                        const value = args.config.replaceMap.get(placeholder);
+                        if (value == null) {
+                            continue;
+                        }
+                        switch (value.?) {
+                            .string => |str| {
+                                if (std.mem.indexOf(u8, text, placeholder) != null) {
+                                    const replaceArgs = ReplaceArgs{
+                                        .allocator = allocator, //
+                                        .p_tag = p_tag, //
+                                        .p_tag_text = text, //
+                                        .placeholder = placeholder, //
+                                        .new_text = str,
+                                    };
+                                    try replacePlaceholder(replaceArgs);
+                                    local_placeholder_found = true;
+                                    break;
+                                }
+                            },
+                            .table => |_| {
+                                // Check if the contents of the paragraph is JUST the placeholder
+                                if (!std.mem.eql(u8, text, placeholder)) {
+                                    zlog.warn("Table replacement will remove the whole paragrah for {s}", .{placeholder});
+                                }
+
+                                if (try table.createTable(doc, p_tag.ns)) |table_node| {
+                                    p_tag.* = table_node.*;
+                                    local_placeholder_found = true;
+                                    break;
+                                }
+                            },
+                        }
                     }
                 }
 
+                allocator.free(text);
+                text = getText(allocator, p_tag) catch "";
                 placeholder_found = local_placeholder_found;
             }
         }
@@ -201,4 +215,9 @@ pub fn parseDoc(args: parseDocArgs) !void {
     if (result == -1) {
         zlog.err("could not save file", .{});
     }
+
+    // TODO: delete me!
+    _ = xml.xmlSaveFile("output.xml", doc);
+
+    // TODO: Apply this for the header and footer as well
 }

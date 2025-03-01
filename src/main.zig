@@ -116,15 +116,10 @@ pub fn main() !void {
         return;
     };
 
-    zlog.debug("data={s}", .{args.data});
-    zlog.debug("output={s}", .{args.output});
-    zlog.debug("template={s}", .{args.template});
-
     var config_file = args.data;
     if (!utils.isAbsPath(args.data)) {
         config_file = try std.fs.path.join(allocator, &[_][]const u8{ try std.fs.cwd().realpathAlloc(allocator, "."), args.data });
     }
-    zlog.debug("config_file={s}", .{config_file});
     var cfg = try config.parseConfig(allocator, config_file);
     defer cfg.deinit(allocator);
 

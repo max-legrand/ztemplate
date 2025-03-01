@@ -39,6 +39,9 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkLibrary(libxml2.artifact("xml2"));
     exe_mod.addIncludePath(libxml2.path("include"));
 
+    const yaml = b.dependency("yaml", .{});
+    exe_mod.addImport("yaml", yaml.module("yaml"));
+
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
     const exe = b.addExecutable(.{

@@ -6,6 +6,7 @@ const App = yazap.App;
 const Arg = yazap.Arg;
 const zip = @import("zip.zig");
 const xml = @import("xml.zig");
+const config = @import("config.zig");
 
 const ztemplate_args = struct {
     output: []const u8,
@@ -30,6 +31,34 @@ fn validArgs(matches: yazap.ArgMatches) !ztemplate_args {
         .force = force,
     };
 }
+
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const scope_name = @tagName(scope);
+    if (std.mem.eql(u8, scope_name, "tokenizer") or std.mem.eql(u8, scope_name, "parser")) {
+        return;
+    }
+
+    // We only recognize 4 log levels in this application.
+    const level_txt = switch (level) {
+        .err => "error",
+        .warn => "warning",
+        .info => "info",
+        .debug => "debug",
+    };
+    const prefix1 = level_txt;
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+
+    // Print the message to stderr, silently ignoring any errors
+    std.debug.print(prefix1 ++ prefix2 ++ format ++ "\n", args);
+}
+pub const std_options = std.Options{
+    .logFn = log,
+};
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -91,21 +120,30 @@ pub fn main() !void {
     zlog.debug("output={s}", .{args.output});
     zlog.debug("template={s}", .{args.template});
 
+    var config_file = args.data;
+    if (!utils.isAbsPath(args.data)) {
+        config_file = try std.fs.path.join(allocator, &[_][]const u8{ try std.fs.cwd().realpathAlloc(allocator, "."), args.data });
+    }
+    zlog.debug("config_file={s}", .{config_file});
+    var cfg = try config.parseConfig(allocator, config_file);
+    defer cfg.deinit(allocator);
+
+    const json_string = cfg.toJson(allocator) catch @panic("oom");
+    zlog.debug("config={s}", .{json_string});
+    allocator.free(json_string);
+
     if (matches.subcommandMatches("version")) |_| {
         const version_string = try utils.version(allocator);
         zlog.info("Version: {s}", .{version_string});
     }
 
     const dir = try utils.unzip(args.template, args.force);
-    var placeholders = [_][]const u8{ "{{TEST}}", "{{AAA}}" };
     const parseArgs = xml.parseDocArgs{
         .allocator = allocator,
         .folder_path = dir,
-        .placeholders = placeholders[0..],
+        .config = cfg,
     };
     try xml.parseDoc(parseArgs);
-
-    // try zip.zipDirectory(allocator, dir, args.output, true);
 
     var output = args.output;
     if (!utils.isAbsPath(output)) {

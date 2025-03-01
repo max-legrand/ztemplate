@@ -35,6 +35,10 @@
             .url = "git+https://github.com/ianprime0509/zig-libxml2#6cebb963e0ad5789825eb2333a4d21fab8f35a92",
             .hash = "12200f672ceb8df0c715a7018e5c53ad434db17f900c620e6238f178cc9a9d80b88e",
         },
+        .yaml = .{
+            .url = "git+https://github.com/kubkon/zig-yaml#28681eb8581aa5ed37cb6219b43e82989e056f5c",
+            .hash = "12201d5ff5780adaad9fb370dd265ec3afb905c3ca939b8cf4611f7d52dda6411ec0",
+        },
     },
     .paths = .{
         "build.zig",

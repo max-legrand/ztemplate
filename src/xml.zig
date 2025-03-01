@@ -5,12 +5,13 @@ const xml = @cImport({
     @cInclude("libxml/parser.h");
     @cInclude("libxml/tree.h");
 });
+const cfg = @import("config.zig");
 const string = []const u8;
 
 pub const parseDocArgs = struct {
     allocator: std.mem.Allocator,
     folder_path: string,
-    placeholders: []string,
+    config: cfg.Config,
 };
 
 fn getTags(allocator: std.mem.Allocator, root: *xml.struct__xmlNode, tag_name: string) !std.ArrayList(*xml.struct__xmlNode) {
@@ -131,7 +132,14 @@ fn replacePlaceholder(args: ReplaceArgs) !void {
 pub fn parseDoc(args: parseDocArgs) !void {
     const allocator = args.allocator;
     const folder_path = args.folder_path;
-    const placeholders = args.placeholders;
+
+    var placeholders = std.ArrayList([]const u8).init(allocator);
+    defer placeholders.deinit();
+    var iter = args.config.replaceMap.keyIterator();
+    while (iter.next()) |key| {
+        try placeholders.append(key.*);
+    }
+
     var folder = try std.fs.openDirAbsolute(folder_path, .{});
     defer folder.close();
     const file = try folder.realpathAlloc(allocator, "word/document.xml");
@@ -159,19 +167,28 @@ pub fn parseDoc(args: parseDocArgs) !void {
             var placeholder_found = true;
             while (placeholder_found) {
                 var local_placeholder_found = false;
-                for (placeholders) |placeholder| {
-                    if (std.mem.indexOf(u8, text, placeholder) != null) {
-                        const replaceArgs = ReplaceArgs{
-                            .allocator = allocator, //
-                            .p_tag = p_tag, //
-                            .p_tag_text = text, //
-                            .placeholder = placeholder, //
-                            .new_text = "aaa", //
-                        };
-                        try replacePlaceholder(replaceArgs);
-                        // local_placeholder_found = true;
-                        local_placeholder_found = false;
-                        break;
+                for (placeholders.items) |placeholder| {
+                    const value = args.config.replaceMap.get(placeholder);
+                    if (value == null) {
+                        continue;
+                    }
+                    switch (value.?) {
+                        .string => |str| {
+                            if (std.mem.indexOf(u8, text, placeholder) != null) {
+                                const replaceArgs = ReplaceArgs{
+                                    .allocator = allocator, //
+                                    .p_tag = p_tag, //
+                                    .p_tag_text = text, //
+                                    .placeholder = placeholder, //
+                                    .new_text = str,
+                                };
+                                try replacePlaceholder(replaceArgs);
+                                // local_placeholder_found = true;
+                                local_placeholder_found = false;
+                                break;
+                            }
+                        },
+                        .table => |_| {},
                     }
                 }
 
@@ -181,43 +198,6 @@ pub fn parseDoc(args: parseDocArgs) !void {
     }
 
     const result = xml.xmlSaveFile(file.ptr, doc);
-    if (result == -1) {
-        zlog.err("could not save file", .{});
-    }
-}
-
-pub fn parseXml() void {
-    const doc = xml.xmlReadFile("example.xml", null, 0);
-    if (doc == null) {
-        zlog.err("doc could not be parsed", .{});
-        return;
-    }
-    defer xml.xmlFreeDoc(doc);
-
-    const root = xml.xmlDocGetRootElement(doc);
-    if (root == null) {
-        zlog.err("root could not be parsed", .{});
-        return;
-    }
-
-    const tag = root.*.name;
-    zlog.info("tag={s}", .{tag});
-
-    const children_count = xml.xmlChildElementCount(root);
-    zlog.info("children={d}", .{children_count});
-
-    var child: ?*xml.xmlNode = root.*.children;
-    while (child != null) {
-        const ch = child.?.*;
-        if (ch.type == xml.XML_ELEMENT_NODE) {
-            const child_tag = ch.name;
-            zlog.info("child_tag={s}", .{child_tag});
-            xml.xmlNodeSetContent(child, "AAAA");
-        }
-        child = child.?.*.next;
-    }
-
-    const result = xml.xmlSaveFile("output.xml", doc);
     if (result == -1) {
         zlog.err("could not save file", .{});
     }

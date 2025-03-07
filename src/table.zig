@@ -3,11 +3,28 @@ const xml = @cImport({
     @cInclude("libxml/parser.h");
     @cInclude("libxml/tree.h");
 });
+const config = @import("config.zig");
+const zlog = @import("zlog");
 
-pub fn createTable(
+pub const CreateTableArgs = struct {
     doc: [*c]xml.struct__xmlDoc,
     ns: [*c]xml.struct__xmlNs,
+    table: config.Table,
+};
+
+pub fn createTable(
+    args: CreateTableArgs,
 ) !?[*c]xml.struct__xmlNode {
+    const data = args.table.table_data;
+    if (data.len == 0) {
+        return null;
+    }
+
+    const cols = data[0].len;
+    // Args assignment
+    const ns = args.ns;
+    const doc = args.doc;
+
     const node = xml.xmlNewNode(ns, @constCast("tbl"));
     if (node) |n| {
         n.*.type = xml.XML_ELEMENT_NODE;
@@ -23,17 +40,18 @@ pub fn createTable(
 
         if (xml.xmlNewNode(ns, "tblGrid")) |grid| {
             // Create two columns with equal width
-            for (0..2) |_| {
+            for (0..cols) |_| {
                 if (xml.xmlNewNode(ns, "gridCol")) |gc| {
-                    // Don't specify width here, let Word calculate it based on the table width
                     _ = xml.xmlAddChild(grid, gc);
                 }
             }
             _ = xml.xmlAddChild(n, grid);
         }
 
-        if (createRow(doc, ns)) |r| {
-            _ = xml.xmlAddChild(n, r);
+        for (0..data.len) |idx| {
+            if (createRow(idx, args.table, doc, ns)) |r| {
+                _ = xml.xmlAddChild(n, r);
+            }
         }
     }
 
@@ -137,27 +155,74 @@ fn createTpr(
     return node;
 }
 
-fn createRow(doc: [*c]xml.struct__xmlDoc, ns: [*c]xml.struct__xmlNs) ?[*c]xml.struct__xmlNode {
+fn createRow(idx: usize, table: config.Table, doc: [*c]xml.struct__xmlDoc, ns: [*c]xml.struct__xmlNs) ?[*c]xml.struct__xmlNode {
     const row = xml.xmlNewNode(ns, @constCast("tr"));
     if (row) |r| {
         r.*.type = xml.XML_ELEMENT_NODE;
         r.*.doc = doc;
-
-        if (createCell(doc, ns, "1")) |c| {
-            _ = xml.xmlAddChild(r, c);
-        }
-
-        if (createCell(doc, ns, "2")) |c| {
-            _ = xml.xmlAddChild(r, c);
+        for (0..table.table_data[idx].len) |cidx| {
+            if (createCell(doc, ns, table, idx, cidx)) |c| {
+                _ = xml.xmlAddChild(r, c);
+            }
         }
     }
     return row;
 }
 
+fn applyStyle(style: config.Style, wpr: [*c]xml.struct__xmlNode) void {
+    if (style.color) |color_value| {
+        if (xml.xmlNewNode(wpr.*.ns, "color")) |color_node| {
+            color_node.*.type = xml.XML_ELEMENT_NODE;
+            color_node.*.doc = wpr.*.doc;
+            var out_buf: [6]u8 = undefined;
+            _ = std.fmt.formatIntBuf(&out_buf, color_value, 16, .upper, .{});
+            _ = xml.xmlSetProp(color_node, "w:val", @constCast(&out_buf));
+            _ = xml.xmlAddChild(wpr, color_node);
+        }
+    }
+    if (style.font) |f| {
+        switch (f) {
+            .normal => {},
+            .bold => {
+                if (xml.xmlNewNode(wpr.*.ns, "b")) |bold_node| {
+                    bold_node.*.type = xml.XML_ELEMENT_NODE;
+                    bold_node.*.doc = wpr.*.doc;
+                    _ = xml.xmlSetProp(bold_node, "w:val", "true");
+                    _ = xml.xmlAddChild(wpr, bold_node);
+                }
+            },
+            .italic => {
+                if (xml.xmlNewNode(wpr.*.ns, "i")) |italic_node| {
+                    italic_node.*.type = xml.XML_ELEMENT_NODE;
+                    italic_node.*.doc = wpr.*.doc;
+                    _ = xml.xmlSetProp(italic_node, "w:val", "true");
+                    _ = xml.xmlAddChild(wpr, italic_node);
+                }
+            },
+            .italic_bold => {
+                if (xml.xmlNewNode(wpr.*.ns, "b")) |bold_node| {
+                    bold_node.*.type = xml.XML_ELEMENT_NODE;
+                    bold_node.*.doc = wpr.*.doc;
+                    _ = xml.xmlSetProp(bold_node, "w:val", "true");
+                    _ = xml.xmlAddChild(wpr, bold_node);
+                }
+                if (xml.xmlNewNode(wpr.*.ns, "i")) |italic_node| {
+                    italic_node.*.type = xml.XML_ELEMENT_NODE;
+                    italic_node.*.doc = wpr.*.doc;
+                    _ = xml.xmlSetProp(italic_node, "w:val", "true");
+                    _ = xml.xmlAddChild(wpr, italic_node);
+                }
+            },
+        }
+    }
+}
+
 fn createCell(
     doc: [*c]xml.struct__xmlDoc,
     ns: [*c]xml.struct__xmlNs,
-    data: []const u8,
+    table: config.Table,
+    row: usize,
+    col: usize,
 ) ?[*c]xml.struct__xmlNode {
     const cell = xml.xmlNewNode(ns, @constCast("tc"));
     if (cell) |c| {
@@ -198,12 +263,34 @@ fn createCell(
             if (run) |r| {
                 r.*.type = xml.XML_ELEMENT_NODE;
                 r.*.doc = doc;
+
+                if (xml.xmlNewNode(ns, @constCast("rPr"))) |wpr| {
+                    wpr.*.type = xml.XML_ELEMENT_NODE;
+                    wpr.*.doc = doc;
+                    // Styles are applied first by the exact cell, then by the row, then by the column
+                    if (table.cell_styles.get(.{ row, col })) |style| {
+                        zlog.debug("Applying cell style for {d},{d}", .{ row, col });
+                        applyStyle(style, wpr);
+                    } else if (table.row_styles.get(row)) |style| {
+                        zlog.debug("Applying row style for {d},{d}", .{ row, col });
+                        applyStyle(style, wpr);
+                    } else if (table.col_styles.get(col)) |style| {
+                        zlog.debug("Applying col style for col {d},{d}", .{ row, col });
+                        applyStyle(style, wpr);
+                    } else {
+                        zlog.debug("No style for {d},{d}", .{ row, col });
+                    }
+
+                    _ = xml.xmlAddChild(r, wpr);
+                }
+
                 const text = xml.xmlNewNode(ns, @constCast("t"));
                 if (text) |t| {
                     t.*.type = xml.XML_ELEMENT_NODE;
                     t.*.doc = doc;
 
                     // Create a text node with the actual content
+                    const data = table.table_data[row][col];
                     const text_content = xml.xmlNewText(@constCast(@ptrCast(data.ptr)));
                     if (text_content != null) {
                         _ = xml.xmlAddChild(t, text_content);

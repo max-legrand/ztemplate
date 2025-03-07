@@ -123,10 +123,6 @@ pub fn main() !void {
     var cfg = try config.parseConfig(allocator, config_file);
     defer cfg.deinit(allocator);
 
-    const json_string = cfg.toJson(allocator) catch @panic("oom");
-    zlog.debug("config={s}", .{json_string});
-    allocator.free(json_string);
-
     if (matches.subcommandMatches("version")) |_| {
         const version_string = try utils.version(allocator);
         zlog.info("Version: {s}", .{version_string});

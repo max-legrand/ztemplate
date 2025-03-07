@@ -188,13 +188,19 @@ pub fn parseDoc(args: parseDocArgs) !void {
                                     break;
                                 }
                             },
-                            .table => |_| {
+                            .table => |t| {
                                 // Check if the contents of the paragraph is JUST the placeholder
                                 if (!std.mem.eql(u8, text, placeholder)) {
                                     zlog.warn("Table replacement will remove the whole paragrah for {s}", .{placeholder});
                                 }
 
-                                if (try table.createTable(doc, p_tag.ns)) |table_node| {
+                                const ctArgs = table.CreateTableArgs{
+                                    .doc = doc,
+                                    .ns = p_tag.ns,
+                                    .table = t,
+                                };
+
+                                if (try table.createTable(ctArgs)) |table_node| {
                                     p_tag.* = table_node.*;
                                     local_placeholder_found = true;
                                     break;

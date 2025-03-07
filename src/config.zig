@@ -3,11 +3,47 @@ const yaml = @import("yaml");
 const zlog = @import("zlog");
 const utils = @import("utils.zig");
 
-const Table = struct {
+const FontStyle = enum {
+    normal,
+    bold,
+    italic,
+    italic_bold,
+    fn fromString(str: []const u8) ?FontStyle {
+        if (std.mem.eql(u8, str, "normal")) return .normal;
+        if (std.mem.eql(u8, str, "bold")) return .bold;
+        if (std.mem.eql(u8, str, "italic")) return .italic;
+        if (std.mem.eql(u8, str, "italic_bold")) return .italic_bold;
+        return null;
+    }
+};
+
+fn parseColor(str: []const u8) ?usize {
+    const first_char = str[0];
+    if (first_char == '#') {
+        return std.fmt.parseInt(usize, str[1..], 16) catch return null;
+    } else {
+        return std.fmt.parseInt(usize, str, 16) catch return null;
+    }
+}
+
+pub const Style = struct {
+    // Font style to be used, defaults to normal if not provided.
+    font: ?FontStyle,
+    // Color to be used, defaults to automatic color if not provided.
+    color: ?usize,
+};
+
+const Tuple = std.meta.Tuple;
+const Coordinate = Tuple(&[_]type{ usize, usize });
+
+pub const Table = struct {
     data_file: []const u8,
     table_data: [][][]const u8,
+    row_styles: std.AutoHashMap(usize, Style),
+    col_styles: std.AutoHashMap(usize, Style),
+    cell_styles: std.AutoHashMap(Coordinate, Style),
 
-    fn deinit(self: Table, allocator: std.mem.Allocator) void {
+    fn deinit(self: *Table, allocator: std.mem.Allocator) void {
         // Free the data_file string
         allocator.free(self.data_file);
 
@@ -25,26 +61,10 @@ const Table = struct {
         }
         // Free the outer table_data array
         allocator.free(self.table_data);
-    }
 
-    fn toJson(self: Table, allocator: std.mem.Allocator) ![]const u8 {
-        var json = std.ArrayList(u8).init(allocator);
-        try json.appendSlice("{\"data_file\":\"");
-        try json.appendSlice(self.data_file);
-        try json.appendSlice("\",\"table_data\":[");
-        for (self.table_data) |row| {
-            try json.appendSlice("[");
-            for (row) |col| {
-                try json.appendSlice("\"");
-                try json.appendSlice(col);
-                try json.appendSlice("\",");
-            }
-            _ = json.pop();
-            try json.appendSlice("],");
-        }
-        _ = json.pop();
-        try json.appendSlice("]");
-        return json.items;
+        self.row_styles.deinit();
+        self.col_styles.deinit();
+        self.cell_styles.deinit();
     }
 };
 
@@ -65,41 +85,13 @@ pub const Config = struct {
                 .string => |str| {
                     allocator.free(str);
                 },
-                .table => |table| {
+                .table => |*table| {
                     table.deinit(allocator);
                 },
             }
             allocator.free(entry.key_ptr.*);
         }
         self.replaceMap.deinit();
-    }
-
-    pub fn toJson(self: Config, allocator: std.mem.Allocator) ![]const u8 {
-        var json = std.ArrayList(u8).init(allocator);
-        try json.appendSlice("{");
-        var iter = self.replaceMap.iterator();
-        while (iter.next()) |entry| {
-            switch (entry.value_ptr.*) {
-                .string => |str| {
-                    try json.appendSlice("\"");
-                    try json.appendSlice(entry.key_ptr.*);
-                    try json.appendSlice("\":\"");
-                    try json.appendSlice(str);
-                    try json.appendSlice("\",");
-                },
-                .table => |t| {
-                    try json.appendSlice("\"");
-                    try json.appendSlice(entry.key_ptr.*);
-                    try json.appendSlice("\":");
-                    try json.appendSlice(try t.toJson(allocator));
-                    try json.appendSlice(",");
-                },
-            }
-        }
-        // Remove the last comma
-        _ = json.pop();
-        try json.appendSlice("}");
-        return json.items;
     }
 };
 
@@ -162,13 +154,114 @@ pub fn parseConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
                 try rows.append(row_slice);
             }
 
+            var row_styles = std.AutoHashMap(usize, Style).init(allocator);
+            var col_styles = std.AutoHashMap(usize, Style).init(allocator);
+            var cell_styles = std.AutoHashMap(Coordinate, Style).init(allocator);
+            // Indexs provided are 1-indexed, so we will subtract 1 to ensure they are properly applied.
+            if (table_map.get("styles")) |s| {
+                const styles = try s.asMap();
+                if (styles.get("rows")) |r| {
+                    const row_style_items = try r.asList();
+                    for (row_style_items) |row_style_item| {
+                        const map = try row_style_item.asMap();
+                        const idx: usize = @intCast(try map.get("index").?.asInt());
+                        var f_style: ?FontStyle = null;
+                        if (map.get("font")) |fs| {
+                            const fs_str = try fs.asString();
+                            f_style = FontStyle.fromString(fs_str);
+                            if (f_style == null) {
+                                zlog.warn("Font style was invalid. Must be one of \"normal\", \"bold\", \"italic\", or \"italic_bold\"", .{});
+                            }
+                        }
+                        var color: ?usize = null;
+                        if (map.get("color")) |color_value| {
+                            const color_str = try color_value.asString();
+                            color = parseColor(color_str);
+                            if (color == null) {
+                                zlog.warn("Color {s} was invalid", .{color_str});
+                            }
+                        }
+                        const style = Style{
+                            .font = f_style,
+                            .color = color,
+                        };
+                        try row_styles.put(idx - 1, style);
+                    }
+                }
+                if (styles.get("cols")) |c| {
+                    const col_style_items = try c.asList();
+                    for (col_style_items) |col_style_item| {
+                        const map = try col_style_item.asMap();
+                        const idx: usize = @intCast(try map.get("index").?.asInt());
+                        var f_style: ?FontStyle = null;
+                        if (map.get("font")) |fs| {
+                            const fs_str = try fs.asString();
+                            f_style = FontStyle.fromString(fs_str);
+                            if (f_style == null) {
+                                zlog.warn("Font style was invalid. Must be one of \"normal\", \"bold\", \"italic\", or \"italic_bold\"", .{});
+                            }
+                        }
+                        var color: ?usize = null;
+                        if (map.get("color")) |color_value| {
+                            const color_str = try color_value.asString();
+                            color = parseColor(color_str);
+                            if (color == null) {
+                                zlog.warn("Color {s} was invalid", .{color_str});
+                            }
+                        }
+                        const style = Style{
+                            .font = f_style,
+                            .color = color,
+                        };
+                        try col_styles.put(idx - 1, style);
+                    }
+                }
+                if (styles.get("cells")) |c| {
+                    const cell_style_items = try c.asList();
+                    for (cell_style_items) |cell_style_item| {
+                        const map = try cell_style_item.asMap();
+                        const idx_string = try map.get("index").?.asString();
+                        var items = std.mem.splitScalar(u8, idx_string, ',');
+                        const row = std.fmt.parseInt(usize, items.next().?, 10) catch return error.InvalidCellIndex;
+                        const col = std.fmt.parseInt(usize, items.next().?, 10) catch return error.InvalidCellIndex;
+                        const idx = Coordinate{ row - 1, col - 1 };
+                        var f_style: ?FontStyle = null;
+                        if (map.get("font")) |fs| {
+                            const fs_str = try fs.asString();
+                            f_style = FontStyle.fromString(fs_str);
+                            if (f_style == null) {
+                                zlog.warn("Font style was invalid. Must be one of \"normal\", \"bold\", \"italic\", or \"italic_bold\"", .{});
+                            }
+                        }
+                        var color: ?usize = null;
+                        if (map.get("color")) |color_value| {
+                            const color_str = try color_value.asString();
+                            color = parseColor(color_str);
+                            if (color == null) {
+                                zlog.warn("Color {s} was invalid", .{color_str});
+                            }
+                        }
+                        const style = Style{
+                            .font = f_style,
+                            .color = color,
+                        };
+                        try cell_styles.put(idx, style);
+                    }
+                }
+            }
+
             // Create the final table data
             const table_data = try allocator.dupe([][]const u8, rows.items);
 
-            try config.replaceMap.put(owned_key, .{ .table = Table{
-                .data_file = owned_file,
-                .table_data = table_data,
-            } });
+            try config.replaceMap.put(owned_key, .{
+                .table = Table{
+                    .data_file = owned_file,
+                    .table_data = table_data,
+                    .row_styles = row_styles,
+                    .col_styles = col_styles,
+                    .cell_styles = cell_styles,
+                },
+            });
         }
     }
 

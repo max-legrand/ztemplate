@@ -1,4 +1,12 @@
 TEST: replace
 another:
   file: test.csv
+  styles:
+    rows:
+      - index: 2
+    cols:
+      - index: 2
+    cells:
+      - index: 2,2
+        color: 33aacc
 content: aaa

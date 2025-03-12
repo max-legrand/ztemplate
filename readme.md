@@ -40,8 +40,14 @@ To run ZTemplate, you can run the following command:
 The output file will be in `zig-out/bin/ztemplate`
 
 # Screenshots
-![before](screenshots/before.png)
-![after](screenshots/after.png)
+<details>
+<summary>Before</summary>
+<img src="screenshots/before.png" alt="before">
+</details>
+<details>
+<summary>After</summary>
+<img src="screenshots/after.png" alt="after">
+</details>
 
 ## Next steps
 - Improved Error Messages: The current error messages are not very user-friendly and need improvement.

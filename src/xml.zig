@@ -70,75 +70,67 @@ const ReplaceArgs = struct {
     p_tag_text: string,
     placeholder: string,
     new_text: string,
+    p_start: usize,
+    p_end: usize,
 };
 
 fn replacePlaceholder(args: ReplaceArgs) !void {
     const t_tags = try getTags(args.allocator, args.p_tag, "t");
     defer t_tags.deinit();
     var text = args.p_tag_text;
-    var allocated = false;
+    const start = args.p_start;
+    const end = args.p_end;
 
-    var idx_opt = std.mem.indexOf(u8, args.p_tag_text, args.placeholder);
-    while (idx_opt != null) {
-        var start = idx_opt.?;
-        var end = start + args.placeholder.len;
-
-        var i: usize = 0;
-        while (i < t_tags.items.len) : (i += 1) {
-            const t_tag = t_tags.items[i];
-            const child = t_tag.children;
-            if (child == null) {
+    var counter: usize = 0;
+    var i: usize = 0;
+    while (i < t_tags.items.len) : (i += 1) {
+        const t_tag = t_tags.items[i];
+        const child = t_tag.children;
+        if (child == null) {
+            continue;
+        }
+        if (child.*.content) |content| {
+            const inner_text = std.mem.span(content);
+            const local_end = counter + inner_text.len;
+            if (start >= local_end) {
+                counter += inner_text.len;
                 continue;
-            }
-            const content = child.?.*.content;
-            if (content != null) {
-                const inner_text = std.mem.span(content.?);
-                if (start >= inner_text.len) {
-                    start -= inner_text.len;
-                    end -= inner_text.len;
-                    continue;
-                } else if (start < inner_text.len and end <= inner_text.len) {
-                    // Full text replacement inside string
-                    text = std.fmt.allocPrint(args.allocator, "{s}{s}{s}", .{ text[0..start], args.new_text, text[end..] }) catch @panic("oom");
-                    if (allocated) {
-                        args.allocator.free(text);
-                    }
-                    allocated = true;
-                    defer args.allocator.free(text);
-                    idx_opt = std.mem.indexOf(u8, text, args.placeholder);
-                    const new_inner = std.fmt.allocPrint(args.allocator, "{s}{s}{s}", .{ inner_text[0..start], args.new_text, inner_text[end..] }) catch @panic("oom");
-                    xml.xmlNodeSetContent(child, new_inner.ptr);
-                    args.allocator.free(new_inner);
-                } else if (start < text.len and end > text.len) {
-                    // We need to replace the start of the placeholder with the new text and in the next valid child trim until the end of the placeholder
-                    text = std.fmt.allocPrint(args.allocator, "{s}{s}{s}", .{ text[0..start], args.new_text, text[end..] }) catch @panic("oom");
-                    if (allocated) {
-                        args.allocator.free(text);
-                    }
-                    allocated = true;
-                    defer args.allocator.free(text);
-                    idx_opt = std.mem.indexOf(u8, text, args.placeholder);
-                    const new_inner = std.fmt.allocPrint(args.allocator, "{s}{s}", .{ inner_text[0..start], args.new_text }) catch @panic("oom");
-                    xml.xmlNodeSetContent(child, new_inner.ptr);
-                    args.allocator.free(new_inner);
-                    end -= inner_text.len;
+            } else if (start < local_end and end <= local_end) {
+                const new_text = std.fmt.allocPrint(args.allocator, "{s}{s}{s}", .{ text[0..start], args.new_text, text[end..] }) catch @panic("oom");
+                text = new_text;
+                defer args.allocator.free(text);
+                const new_inner = std.fmt.allocPrint(args.allocator, "{s}{s}{s}", .{ inner_text[0..(start - counter)], args.new_text, inner_text[(end - counter)..] }) catch @panic("oom");
+                xml.xmlNodeSetContent(child, new_inner.ptr);
+                args.allocator.free(new_inner);
+                break;
+            } else if (start < text.len and end > text.len) {
+                // We need to replace the start of the placeholder with the new text and in the next valid child trim until the end of the placeholder
+                const new_text = std.fmt.allocPrint(args.allocator, "{s}{s}{s}", .{ text[0..start], args.new_text, text[end..] }) catch @panic("oom");
+                text = new_text;
+                defer args.allocator.free(text);
+                const new_inner = std.fmt.allocPrint(args.allocator, "{s}{s}", .{ inner_text[0..(start - counter)], args.new_text }) catch @panic("oom");
+                xml.xmlNodeSetContent(child, new_inner.ptr);
+                args.allocator.free(new_inner);
+                counter += inner_text.len;
 
-                    i += 1;
-                    var inner_child: [*c]xml.struct__xmlNode = null;
-                    while (inner_child == null) : (i += 1) {
-                        const inner_t_tag = t_tags.items[i];
-                        inner_child = inner_t_tag.children;
-                    }
-                    i -= 1;
+                i += 1;
+                var inner_child: [*c]xml.struct__xmlNode = null;
+                while (inner_child == null) : (i += 1) {
+                    const inner_t_tag = t_tags.items[i];
+                    inner_child = inner_t_tag.children;
+                }
+                i -= 1;
 
-                    const inner_content = child.?.*.content;
+                if (inner_child) |ic| {
+                    const inner_content = ic.*.content;
                     if (inner_content != null) {
                         const next_inner_text = std.mem.span(inner_content.?);
-                        xml.xmlNodeSetContent(inner_child.?, next_inner_text[end..]);
+                        xml.xmlNodeSetContent(inner_child.?, next_inner_text[(end - counter)..]);
                     }
-                } else {
-                    @panic("start and end are out of bounds");
                 }
+                break;
+            } else {
+                @panic("start and end are out of bounds");
             }
         }
     }
@@ -166,7 +158,6 @@ pub fn findChildByName(node: ?*xml.struct__xmlNode, name: []const u8) ?*xml.stru
 fn parseDocInner(
     allocator: std.mem.Allocator,
     doc: [*c]xml.struct__xmlDoc,
-    placeholders: std.ArrayList([]const u8),
     map: std.StringHashMap(cfg.Value),
 ) !void {
     const root_ptr = xml.xmlDocGetRootElement(doc);
@@ -191,69 +182,127 @@ fn parseDocInner(
                 var text = getText(allocator, child) catch "";
                 defer allocator.free(text);
 
-                if (text.len > 0 and std.mem.indexOf(u8, text, "{{") != null) {
+                if (text.len > 0) {
                     var placeholder_found = true;
-                    while (placeholder_found) {
+                    while (placeholder_found and std.mem.indexOf(u8, text, "{{") != null and std.mem.indexOf(u8, text, "}}") != null) {
                         var local_placeholder_found = false;
-                        for (placeholders.items) |placeholder| {
-                            if (std.mem.indexOf(u8, text, placeholder) != null) {
-                                const value = map.get(placeholder);
-                                if (value == null) {
-                                    continue;
-                                }
-                                switch (value.?) {
-                                    .string => |str| {
-                                        if (std.mem.indexOf(u8, text, placeholder) != null) {
-                                            const replaceArgs = ReplaceArgs{
-                                                .allocator = allocator, //
-                                                .p_tag = child, //
-                                                .p_tag_text = text, //
-                                                .placeholder = placeholder, //
-                                                .new_text = str,
-                                            };
-                                            try replacePlaceholder(replaceArgs);
-                                            local_placeholder_found = true;
-                                            break;
-                                        }
-                                    },
-                                    .table => |t| {
-                                        // Check if the contents of the paragraph is JUST the placeholder
-                                        if (!std.mem.eql(u8, text, placeholder)) {
-                                            zlog.warn("Table replacement will remove the whole paragrah for {s}", .{placeholder});
-                                        }
+                        const placeholder_start = std.mem.indexOf(u8, text, "{{").?;
+                        const placeholder_end = std.mem.indexOf(u8, text, "}}").? + 2;
+                        const placeholder = text[placeholder_start..placeholder_end];
 
-                                        const ctArgs = table.CreateTableArgs{
-                                            .doc = doc,
-                                            .ns = child.*.ns,
-                                            .table = t,
+                        if (map.get(placeholder)) |value| {
+                            switch (value) {
+                                .string => |str| {
+                                    if (std.mem.indexOf(u8, text, placeholder) != null) {
+                                        const replaceArgs = ReplaceArgs{
                                             .allocator = allocator,
+                                            .p_tag = child,
+                                            .p_tag_text = text,
+                                            .placeholder = placeholder,
+                                            .new_text = str,
+                                            .p_start = placeholder_start,
+                                            .p_end = placeholder_end,
                                         };
+                                        try replacePlaceholder(replaceArgs);
+                                        local_placeholder_found = true;
+                                    }
+                                },
+                                .table => |t| {
+                                    // Check if the contents of the paragraph is JUST the placeholder
+                                    if (!std.mem.eql(u8, text, placeholder)) {
+                                        zlog.warn("Table replacement will remove the whole paragrah for {s}", .{placeholder});
+                                    }
 
-                                        if (try table.createTable(ctArgs)) |table_node| {
-                                            // Preserve position in the document
-                                            const next = child.*.next;
-                                            const prev = child.*.prev;
-                                            const parent = child.*.parent;
+                                    const ctArgs = table.CreateTableArgs{
+                                        .doc = doc,
+                                        .ns = child.*.ns,
+                                        .table = t,
+                                        .allocator = allocator,
+                                    };
 
-                                            // Copy the table node content
-                                            child.* = table_node.*;
+                                    if (try table.createTable(ctArgs)) |table_node| {
+                                        // Preserve position in the document
+                                        const next = child.*.next;
+                                        const prev = child.*.prev;
+                                        const parent = child.*.parent;
 
-                                            // Restore the sibling links
-                                            child.*.next = next;
-                                            child.*.prev = prev;
-                                            child.*.parent = parent;
-                                            local_placeholder_found = true;
-                                            break;
-                                        }
-                                    },
-                                }
+                                        // Copy the table node content
+                                        child.* = table_node.*;
+
+                                        // Restore the sibling links
+                                        child.*.next = next;
+                                        child.*.prev = prev;
+                                        child.*.parent = parent;
+                                        local_placeholder_found = true;
+                                    }
+                                },
                             }
                         }
-
                         allocator.free(text);
                         text = getText(allocator, child) catch "";
                         placeholder_found = local_placeholder_found;
                     }
+                    // var placeholder_found = true;
+                    // while (placeholder_found) {
+                    //     var local_placeholder_found = false;
+                    //     for (placeholders.items) |placeholder| {
+                    //         if (std.mem.indexOf(u8, text, placeholder) != null) {
+                    //             const value = map.get(placeholder);
+                    //             if (value == null) {
+                    //                 continue;
+                    //             }
+                    //             switch (value.?) {
+                    //                 .string => |str| {
+                    //                     if (std.mem.indexOf(u8, text, placeholder) != null) {
+                    //                         const replaceArgs = ReplaceArgs{
+                    //                             .allocator = allocator, //
+                    //                             .p_tag = child, //
+                    //                             .p_tag_text = text, //
+                    //                             .placeholder = placeholder, //
+                    //                             .new_text = str,
+                    //                         };
+                    //                         try replacePlaceholder(replaceArgs);
+                    //                         local_placeholder_found = true;
+                    //                         break;
+                    //                     }
+                    //                 },
+                    //                 .table => |t| {
+                    //                     // Check if the contents of the paragraph is JUST the placeholder
+                    //                     if (!std.mem.eql(u8, text, placeholder)) {
+                    //                         zlog.warn("Table replacement will remove the whole paragrah for {s}", .{placeholder});
+                    //                     }
+                    //
+                    //                     const ctArgs = table.CreateTableArgs{
+                    //                         .doc = doc,
+                    //                         .ns = child.*.ns,
+                    //                         .table = t,
+                    //                         .allocator = allocator,
+                    //                     };
+                    //
+                    //                     if (try table.createTable(ctArgs)) |table_node| {
+                    //                         // Preserve position in the document
+                    //                         const next = child.*.next;
+                    //                         const prev = child.*.prev;
+                    //                         const parent = child.*.parent;
+                    //
+                    //                         // Copy the table node content
+                    //                         child.* = table_node.*;
+                    //
+                    //                         // Restore the sibling links
+                    //                         child.*.next = next;
+                    //                         child.*.prev = prev;
+                    //                         child.*.parent = parent;
+                    //                         local_placeholder_found = true;
+                    //                         break;
+                    //                     }
+                    //                 },
+                    //             }
+                    //         }
+                    //     }
+                    //     allocator.free(text);
+                    //     text = getText(allocator, child) catch "";
+                    //     placeholder_found = local_placeholder_found;
+                    // }
                 }
             }
         }
@@ -286,7 +335,6 @@ pub fn parseDoc(args: parseDocArgs) !void {
     parseDocInner(
         allocator,
         doc.?,
-        placeholders,
         args.config.replaceMap,
     ) catch |err| return err;
 
@@ -310,7 +358,7 @@ pub fn parseDoc(args: parseDocArgs) !void {
             return error.DocNotReadable;
         }
 
-        parseDocInner(allocator, hf_doc.?, placeholders, args.config.replaceMap) catch |err| return err;
+        parseDocInner(allocator, hf_doc.?, args.config.replaceMap) catch |err| return err;
 
         const hf_result = xml.xmlSaveFile(header_footer_file.ptr, hf_doc);
         if (hf_result == -1) {

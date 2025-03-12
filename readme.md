@@ -53,3 +53,4 @@ The output file will be in `zig-out/bin/ztemplate`
 - Improved Error Messages: The current error messages are not very user-friendly and need improvement.
 - Advanced Styling: Currently, replaced text inherits the style of the placeholder. Future enhancements could allow overriding this style and expanding styling options for tables.
 - Multi-Document Processing: Currently, ZTemplate processes documents one at a time. Future versions should support processing multiple documents concurrently.
+- Windows support: Right now, there is some functionality missing that precludes this project from being used in a native Windows environment. Windows users should use WSL to run ZTemplate.

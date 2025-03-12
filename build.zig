@@ -15,6 +15,8 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const is_windows = target.result.os.tag == .windows;
+
     // We will also create a module for our other entry point, 'main.zig'.
     const exe_mod = b.createModule(.{
         // `root_source_file` is the Zig "entry point" of the module. If a module
@@ -35,7 +37,11 @@ pub fn build(b: *std.Build) void {
     const yazap = b.dependency("yazap", .{});
     exe_mod.addImport("yazap", yazap.module("yazap"));
 
-    const libxml2 = b.dependency("libxml2", .{});
+    const libxml2 = b.dependency("libxml2", .{
+        .target = target,
+        .optimize = optimize,
+        .http = !is_windows,
+    });
     exe_mod.linkLibrary(libxml2.artifact("xml2"));
     exe_mod.addIncludePath(libxml2.path("include"));
 

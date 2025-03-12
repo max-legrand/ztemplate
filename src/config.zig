@@ -1,5 +1,5 @@
 const std = @import("std");
-const yaml = @import("yaml");
+const Yaml = @import("yaml").Yaml;
 const zlog = @import("zlog");
 const utils = @import("utils.zig");
 
@@ -101,14 +101,15 @@ pub fn parseConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     const data = try file_data.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
-    var yaml_data = try yaml.Yaml.load(allocator, data);
-    defer yaml_data.deinit(allocator);
+    var yaml: Yaml = .{ .source = data };
+    defer yaml.deinit(allocator);
+    try yaml.load(allocator);
 
-    if (yaml_data.docs.items.len == 0) {
+    if (yaml.docs.items.len == 0) {
         return error.NoDocs;
     }
 
-    const top_level = yaml_data.docs.items[0].map;
+    const top_level = yaml.docs.items[0].map;
     var config = Config{ .replaceMap = std.StringHashMap(Value).init(allocator) };
     for (top_level.keys()) |key| {
         const isString = top_level.get(key).?.asString();

@@ -125,7 +125,7 @@ pub fn parseConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
                 defer allocator.free(cwd_path);
 
                 const joined_path = try std.fs.path.join(allocator, &[_][]const u8{ cwd_path, owned_file });
-                allocator.free(owned_file); // Free the old path
+                allocator.free(owned_file);
                 owned_file = joined_path;
             }
 
@@ -136,11 +136,13 @@ pub fn parseConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
 
             // Parse the CSV data safely
             var rows = std.ArrayList([][]const u8).init(allocator);
+            defer rows.deinit();
             var lines = std.mem.splitScalar(u8, fdata, '\n');
             while (lines.next()) |line| {
                 if (line.len == 0) continue; // Skip empty lines
 
                 var cols = std.ArrayList([]const u8).init(allocator);
+                defer cols.deinit();
                 var col_iter = std.mem.splitScalar(u8, line, ',');
                 while (col_iter.next()) |col| {
                     if (col.len == 0) continue;

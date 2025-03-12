@@ -10,6 +10,7 @@ pub const CreateTableArgs = struct {
     doc: [*c]xml.struct__xmlDoc,
     ns: [*c]xml.struct__xmlNs,
     table: config.Table,
+    allocator: std.mem.Allocator,
 };
 
 pub fn createTable(
@@ -21,7 +22,6 @@ pub fn createTable(
     }
 
     const cols = data[0].len;
-    // Args assignment
     const ns = args.ns;
     const doc = args.doc;
 
@@ -39,7 +39,7 @@ pub fn createTable(
         }
 
         if (xml.xmlNewNode(ns, "tblGrid")) |grid| {
-            // Create two columns with equal width
+            // Create columns
             for (0..cols) |_| {
                 if (xml.xmlNewNode(ns, "gridCol")) |gc| {
                     _ = xml.xmlAddChild(grid, gc);
@@ -48,14 +48,27 @@ pub fn createTable(
             _ = xml.xmlAddChild(n, grid);
         }
 
-        for (0..data.len) |idx| {
-            if (createRow(idx, args.table, doc, ns)) |r| {
-                _ = xml.xmlAddChild(n, r);
-            }
+        // Create rows
+        for (0..data.len) |row_idx| {
+            try createRow(args.allocator, row_idx, args.table, n);
         }
     }
 
     return node;
+}
+
+fn createBorder(
+    parent: [*c]xml.struct__xmlNode,
+    border_name: []const u8,
+) void {
+    const border = xml.xmlNewNode(parent.*.ns, @ptrCast(border_name.ptr));
+    if (border) |b| {
+        _ = xml.xmlSetProp(b, "w:val", "single");
+        _ = xml.xmlSetProp(b, "w:sz", "8");
+        _ = xml.xmlSetProp(b, "w:space", "0");
+        _ = xml.xmlSetProp(b, "w:color", "000000");
+        _ = xml.xmlAddChild(parent, b);
+    }
 }
 
 fn createTpr(
@@ -86,64 +99,11 @@ fn createTpr(
         if (borders) |b| {
             b.*.type = xml.XML_ELEMENT_NODE;
 
-            // Add top border
-            const top = xml.xmlNewNode(ns, @constCast("top"));
-            if (top) |t| {
-                _ = xml.xmlSetProp(t, "w:val", "single");
-                _ = xml.xmlSetProp(t, "w:sz", "8"); // Thicker border (8 instead of 4)
-                _ = xml.xmlSetProp(t, "w:space", "0");
-                _ = xml.xmlSetProp(t, "w:color", "000000"); // Black color
-                _ = xml.xmlAddChild(b, t);
-            }
-
-            // Add left border
-            const left = xml.xmlNewNode(ns, @constCast("left"));
-            if (left) |l| {
-                _ = xml.xmlSetProp(l, "w:val", "single");
-                _ = xml.xmlSetProp(l, "w:sz", "8");
-                _ = xml.xmlSetProp(l, "w:space", "0");
-                _ = xml.xmlSetProp(l, "w:color", "000000");
-                _ = xml.xmlAddChild(b, l);
-            }
-
-            // Add bottom border
-            const bottom = xml.xmlNewNode(ns, @constCast("bottom"));
-            if (bottom) |bt| {
-                _ = xml.xmlSetProp(bt, "w:val", "single");
-                _ = xml.xmlSetProp(bt, "w:sz", "8");
-                _ = xml.xmlSetProp(bt, "w:space", "0");
-                _ = xml.xmlSetProp(bt, "w:color", "000000");
-                _ = xml.xmlAddChild(b, bt);
-            }
-
-            // Add right border
-            const right = xml.xmlNewNode(ns, @constCast("right"));
-            if (right) |r| {
-                _ = xml.xmlSetProp(r, "w:val", "single");
-                _ = xml.xmlSetProp(r, "w:sz", "8");
-                _ = xml.xmlSetProp(r, "w:space", "0");
-                _ = xml.xmlSetProp(r, "w:color", "000000");
-                _ = xml.xmlAddChild(b, r);
-            }
-
-            // Add inside horizontal border
-            const insideH = xml.xmlNewNode(ns, @constCast("insideH"));
-            if (insideH) |ih| {
-                _ = xml.xmlSetProp(ih, "w:val", "single");
-                _ = xml.xmlSetProp(ih, "w:sz", "8");
-                _ = xml.xmlSetProp(ih, "w:space", "0");
-                _ = xml.xmlSetProp(ih, "w:color", "000000");
-                _ = xml.xmlAddChild(b, ih);
-            }
-
-            // Add inside vertical border
-            const insideV = xml.xmlNewNode(ns, @constCast("insideV"));
-            if (insideV) |iv| {
-                _ = xml.xmlSetProp(iv, "w:val", "single");
-                _ = xml.xmlSetProp(iv, "w:sz", "8");
-                _ = xml.xmlSetProp(iv, "w:space", "0");
-                _ = xml.xmlSetProp(iv, "w:color", "000000");
-                _ = xml.xmlAddChild(b, iv);
+            const borders_labels = &[_][]const u8{
+                "top", "left", "right", "bottom", "insideH", "insideV",
+            };
+            for (borders_labels) |border_name| {
+                createBorder(b, border_name);
             }
 
             _ = xml.xmlAddChild(n, borders);
@@ -155,18 +115,25 @@ fn createTpr(
     return node;
 }
 
-fn createRow(idx: usize, table: config.Table, doc: [*c]xml.struct__xmlDoc, ns: [*c]xml.struct__xmlNs) ?[*c]xml.struct__xmlNode {
-    const row = xml.xmlNewNode(ns, @constCast("tr"));
+fn createRow(
+    allocator: std.mem.Allocator,
+    idx: usize,
+    table: config.Table,
+    parent: [*c]xml.struct__xmlNode,
+) !void {
+    const row = xml.xmlNewNode(parent.*.ns, @constCast("tr"));
     if (row) |r| {
         r.*.type = xml.XML_ELEMENT_NODE;
-        r.*.doc = doc;
-        for (0..table.table_data[idx].len) |cidx| {
-            if (createCell(doc, ns, table, idx, cidx)) |c| {
-                _ = xml.xmlAddChild(r, c);
-            }
+        r.*.doc = parent.*.doc;
+
+        // Create cells for this row
+        for (0..table.table_data[idx].len) |col_idx| {
+            try createCell(allocator, r, table, idx, col_idx);
         }
     }
-    return row;
+    if (xml.xmlAddChild(parent, row) == null) {
+        return error.AddChildFailed;
+    }
 }
 
 fn applyStyle(style: config.Style, wpr: [*c]xml.struct__xmlNode) void {
@@ -218,12 +185,14 @@ fn applyStyle(style: config.Style, wpr: [*c]xml.struct__xmlNode) void {
 }
 
 fn createCell(
-    doc: [*c]xml.struct__xmlDoc,
-    ns: [*c]xml.struct__xmlNs,
+    allocator: std.mem.Allocator,
+    parent: [*c]xml.struct__xmlNode,
     table: config.Table,
     row: usize,
     col: usize,
-) ?[*c]xml.struct__xmlNode {
+) !void {
+    const ns = parent.*.ns;
+    const doc = parent.*.doc;
     const cell = xml.xmlNewNode(ns, @constCast("tc"));
     if (cell) |c| {
         c.*.type = xml.XML_ELEMENT_NODE;
@@ -232,7 +201,6 @@ fn createCell(
         // Create cell properties
         const tcPr = xml.xmlNewNode(ns, @constCast("tcPr"));
         if (tcPr) |tp| {
-            // Add vertical alignment
             const vAlign = xml.xmlNewNode(ns, @constCast("vAlign"));
             if (vAlign) |va| {
                 _ = xml.xmlSetProp(va, "w:val", "left");
@@ -248,17 +216,6 @@ fn createCell(
             p.*.type = xml.XML_ELEMENT_NODE;
             p.*.doc = doc;
 
-            // Add paragraph properties for alignment
-            // const pPr = xml.xmlNewNode(ns, @constCast("pPr"));
-            // if (pPr) |pp| {
-            //     const jc = xml.xmlNewNode(ns, @constCast("jc"));
-            //     if (jc) |j| {
-            //         _ = xml.xmlSetProp(j, "w:val", "center");
-            //         _ = xml.xmlAddChild(pp, j);
-            //     }
-            //     _ = xml.xmlAddChild(p, pp);
-            // }
-
             const run = xml.xmlNewNode(ns, @constCast("r"));
             if (run) |r| {
                 r.*.type = xml.XML_ELEMENT_NODE;
@@ -267,20 +224,15 @@ fn createCell(
                 if (xml.xmlNewNode(ns, @constCast("rPr"))) |wpr| {
                     wpr.*.type = xml.XML_ELEMENT_NODE;
                     wpr.*.doc = doc;
-                    // Styles are applied first by the exact cell, then by the row, then by the column
+
+                    // Apply styles based on priority: cell > row > column
                     if (table.cell_styles.get(.{ row, col })) |style| {
-                        zlog.debug("Applying cell style for {d},{d}", .{ row, col });
                         applyStyle(style, wpr);
                     } else if (table.row_styles.get(row)) |style| {
-                        zlog.debug("Applying row style for {d},{d}", .{ row, col });
                         applyStyle(style, wpr);
                     } else if (table.col_styles.get(col)) |style| {
-                        zlog.debug("Applying col style for col {d},{d}", .{ row, col });
                         applyStyle(style, wpr);
-                    } else {
-                        zlog.debug("No style for {d},{d}", .{ row, col });
                     }
-
                     _ = xml.xmlAddChild(r, wpr);
                 }
 
@@ -289,19 +241,18 @@ fn createCell(
                     t.*.type = xml.XML_ELEMENT_NODE;
                     t.*.doc = doc;
 
-                    // Create a text node with the actual content
-                    const data = table.table_data[row][col];
-                    const text_content = xml.xmlNewText(@constCast(@ptrCast(data.ptr)));
-                    if (text_content != null) {
-                        _ = xml.xmlAddChild(t, text_content);
-                    }
+                    const cell_content = allocator.dupe(u8, table.table_data[row][col]) catch "";
+                    defer allocator.free(cell_content);
 
-                    _ = xml.xmlAddChild(r, text);
+                    xml.xmlNodeSetContent(t, @ptrCast(cell_content.ptr));
+                    _ = xml.xmlAddChild(r, t);
                 }
                 _ = xml.xmlAddChild(p, r);
             }
             _ = xml.xmlAddChild(c, p);
         }
     }
-    return cell;
+    if (xml.xmlAddChild(parent, cell) == null) {
+        return error.AddChildFailed;
+    }
 }

@@ -24,8 +24,8 @@
     // internet connectivity.
     .dependencies = .{
         .zlog = .{
-            .url = "git+https://github.com/max-legrand/zlog#614d0db13b363920f7ba89649970759913960e64",
-            .hash = "12208a96b42ba629c2a3666eb1eb5d8151da8f1f0c8520d3e66ee9f45fa86697e2fb",
+            .url = "git+https://github.com/max-legrand/zlog#5e801eb824c8544598e6cea53ee3558fad5d7867",
+            .hash = "1220eaeebf05bab7d630e8b31a6e241f77bbdb283b6d4acbe0860f2e865841719d34",
         },
         .yazap = .{
             .url = "git+https://github.com/max-legrand/yazap?ref=feature/zig-master#3e9854e50a3475e226042736630c11158027bfc0",

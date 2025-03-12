@@ -56,17 +56,17 @@ pub fn unzip(path: string, force: bool) !string {
 
     if (force) {
         // Remove the folder if it exists
-        var exists = true;
+        var fexists = true;
         _ = std.fs.openDirAbsolute(basepath, .{}) catch |err| {
             switch (err) {
                 error.FileNotFound => {
-                    exists = false;
+                    fexists = false;
                 },
                 else => return err,
             }
         };
 
-        if (exists) {
+        if (fexists) {
             try std.fs.deleteTreeAbsolute(basepath);
         }
     }
@@ -90,4 +90,40 @@ pub fn unzip(path: string, force: bool) !string {
 
     try std.zip.extract(dir, stream, .{});
     return basepath;
+}
+
+pub fn systemZip(allocator: std.mem.Allocator, input_folder: []const u8, output_file: []const u8) !void {
+    switch (builtin.os.tag) {
+        .windows => {
+            @panic("not implemented");
+        },
+        .linux, .macos => {
+            var child = std.process.Child.init(&[_][]const u8{ "zip", "-q", "-r", output_file, "." }, allocator);
+            child.cwd = input_folder;
+            _ = try child.spawnAndWait();
+        },
+        else => {
+            @panic("Unsupported OS");
+        },
+    }
+}
+
+pub fn exists(path: string) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        std.fs.accessAbsolute(path, .{}) catch return false;
+        return true;
+    } else {
+        var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+        defer {
+            if (gpa.deinit() == .leak) @panic("memory leaked!");
+        }
+        const allocator = gpa.allocator();
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const a_alloc = arena.allocator();
+
+        const abs_path = std.fs.cwd().realpathAlloc(a_alloc, path) catch @panic("Unable to allocate memory for absolute path");
+        std.fs.accessAbsolute(abs_path, .{}) catch return false;
+        return true;
+    }
 }

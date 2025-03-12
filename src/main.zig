@@ -4,7 +4,6 @@ const yazap = @import("yazap");
 const utils = @import("utils.zig");
 const App = yazap.App;
 const Arg = yazap.Arg;
-const zip = @import("zip.zig");
 const xml = @import("xml.zig");
 const config = @import("config.zig");
 
@@ -61,12 +60,23 @@ pub const std_options = std.Options{
 };
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .enable_memory_limit = false }).init;
+    defer {
+        const result = gpa.deinit();
+        switch (result) {
+            .ok => {},
+            .leak => {
+                zlog.warn("Memory leak detected", .{});
+            },
+        }
+    }
+    const allocator = gpa.allocator();
 
     try zlog.initGlobalLogger(.INFO, true, "main", null, null, allocator);
     defer zlog.deinitGlobalLogger();
 
     var app = App.init(allocator, "ztemplate", "Custom templating tool for word documents");
+    defer app.deinit();
 
     var ztemplate = app.rootCommand();
     try ztemplate.addArg(Arg.booleanOption( //
@@ -117,8 +127,12 @@ pub fn main() !void {
     };
 
     var config_file = args.data;
+    defer allocator.free(config_file);
+
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
     if (!utils.isAbsPath(args.data)) {
-        config_file = try std.fs.path.join(allocator, &[_][]const u8{ try std.fs.cwd().realpathAlloc(allocator, "."), args.data });
+        config_file = try std.fs.path.join(allocator, &[_][]const u8{ cwd, args.data });
     }
     var cfg = try config.parseConfig(allocator, config_file);
     defer cfg.deinit(allocator);
@@ -137,15 +151,14 @@ pub fn main() !void {
     try xml.parseDoc(parseArgs);
 
     var output = args.output;
+    defer allocator.free(output);
     if (!utils.isAbsPath(output)) {
-        const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-
         const isAbs = utils.isAbsPath(output);
         if (!isAbs) {
-            output = try std.fs.path.join(std.heap.page_allocator, &[_][]const u8{ cwd_path, output });
+            output = try std.fs.path.join(allocator, &[_][]const u8{ cwd, output });
         }
     }
 
-    try zip.systemZip(allocator, dir, output);
+    try utils.systemZip(allocator, dir, output);
     try std.fs.deleteTreeAbsolute(dir);
 }
